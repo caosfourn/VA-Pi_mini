@@ -3,13 +3,20 @@ Utility cho sanity-check Giai đoạn 2: kiểm tra checkpoint "Implement: Mini"
 (VQVAE + GPT train from scratch trên CIFAR-10).
 
 Gồm:
-- load_checkpoints(): load lại VQVAE + GPT từ file .pt
-- denormalize(): chuyển ảnh [-1,1] -> [0,1] để hiển thị/lưu PNG
-- sample_and_decode(): sinh ảnh mới từ class label (free-running)
+- load_checkpoints()          : load lại VQVAE + GPT từ file .pt
+- denormalize()               : chuyển ảnh [-1,1] -> [0,1] để hiển thị/lưu PNG
+- sample_and_decode()         : sinh ảnh mới từ class label (free-running)
 - compute_reconstruction_error(): MSE giữa ảnh gốc và ảnh reconstruct qua VQVAE
-  (đo "sàn" chất lượng tokenizer — độc lập với GPT)
-- compute_fid_is(): FID/IS xấp xỉ dùng InceptionV3 (torchvision), KHÔNG cần
-  cài thêm package ngoài (pytorch-fid) để đơn giản hoá môi trường Kaggle.
+                                  (đo "sàn" chất lượng tokenizer — độc lập với GPT)
+- compute_fid()               : FID xấp xỉ dùng InceptionV3 (torchvision)
+- compute_inception_score()   : IS xấp xỉ dùng InceptionV3 (torchvision)
+- compute_precision_recall()  : Precision & Recall theo định nghĩa k-NN manifold
+                                  (Kynkäänniemi et al. 2019), đúng với paper VA-π gốc.
+- compute_all_metrics()       : Hàm tổng hợp — trả về FID, IS, Pre., Rec. một lần,
+                                  dùng để điền bảng benchmark style paper.
+
+Lưu ý: Tất cả metric đều là XẤP XỈ trên tập nhỏ CIFAR,
+KHÔNG phải chuẩn 50k-sample như paper gốc (cần ghi rõ trong báo cáo).
 """
 
 import os
@@ -179,3 +186,138 @@ def compute_inception_score(images, device, batch_size=64, splits=5):
         kl = kl.sum(axis=1)
         scores.append(np.exp(kl.mean()))
     return float(np.mean(scores)), float(np.std(scores))
+
+
+# ----------------------------------------------------------------------------
+# Precision & Recall — k-NN Manifold (Kynkäänniemi et al. 2019)
+# Định nghĩa: ảnh sinh ra nằm trong "manifold" thật (Precision đo fidelity),
+# và ảnh thật nằm trong "manifold" sinh ra (Recall đo diversity).
+# Đây là 2 chỉ số còn thiếu để hoàn thiện bảng benchmark như Bảng 2 trong paper.
+# ----------------------------------------------------------------------------
+
+def _compute_knn_radii(features: np.ndarray, k: int) -> np.ndarray:
+    """Với mỗi điểm trong features, tính khoảng cách tới hàng xóm thứ k.
+    Dùng thuật toán brute-force O(N^2) — phù hợp cho N <= 5000 như CIFAR mini."""
+    # Tính ma trận khoảng cách bình phương bằng dot-product trick để tận dụng numpy
+    sq = (features ** 2).sum(axis=1, keepdims=True)          # (N, 1)
+    D2 = sq + sq.T - 2 * (features @ features.T)             # (N, N)
+    D2 = np.maximum(D2, 0.0)                                  # clip lỗi số học nhỏ
+    # Với mỗi hàng, lấy phần tử thứ k+1 (index k sau khi sort) — bỏ qua chính nó
+    radii_sq = np.partition(D2, k + 1, axis=1)[:, k]         # (N,)  — k-th neighbor
+    return np.sqrt(np.maximum(radii_sq, 0.0))                 # (N,)  — khoảng cách
+
+
+def compute_precision_recall(
+    real_features: np.ndarray,
+    fake_features: np.ndarray,
+    k: int = 3,
+) -> tuple[float, float]:
+    """Tính Precision và Recall theo manifold k-NN.
+
+    Precision = tỷ lệ ảnh giả nằm trong Manifold thật  (đo fidelity / chất lượng)
+    Recall    = tỷ lệ ảnh thật nằm trong Manifold giả  (đo diversity / độ phủ)
+
+    Args:
+        real_features : (N_r, D) — Inception features của ảnh thật.
+        fake_features : (N_f, D) — Inception features của ảnh sinh.
+        k             : số hàng xóm cho manifold (mặc định k=3, theo paper gốc).
+
+    Returns:
+        (precision, recall) — hai float trong [0, 1].
+    """
+    # Tính bán kính manifold cho từng tập
+    real_radii = _compute_knn_radii(real_features, k)  # (N_r,)
+    fake_radii = _compute_knn_radii(fake_features, k)  # (N_f,)
+
+    # Precision: với mỗi điểm giả, kiểm tra có hàng xóm thật nào
+    # trong bán kính real_radii của hàng xóm thật đó không
+    # <=> khoảng cách(fake_i, real_j) <= real_radii[j]  với ít nhất 1 j
+    D_fr = np.sqrt(np.maximum(
+        (fake_features ** 2).sum(1, keepdims=True)
+        + (real_features ** 2).sum(1)
+        - 2 * (fake_features @ real_features.T),
+        0.0,
+    ))  # (N_f, N_r)
+    in_real_manifold = (D_fr <= real_radii[np.newaxis, :]).any(axis=1)  # (N_f,)
+    precision = float(in_real_manifold.mean())
+
+    # Recall: với mỗi điểm thật, kiểm tra có hàng xóm giả nào
+    # trong bán kính fake_radii của hàng xóm giả đó không
+    # <=> khoảng cách(real_i, fake_j) <= fake_radii[j]  với ít nhất 1 j
+    D_rf = D_fr.T  # (N_r, N_f)  — transpose để tái dùng, không tính lại
+    in_fake_manifold = (D_rf <= fake_radii[np.newaxis, :]).any(axis=1)  # (N_r,)
+    recall = float(in_fake_manifold.mean())
+
+    return precision, recall
+
+
+# ----------------------------------------------------------------------------
+# Hàm tổng hợp — trả về đầy đủ bảng benchmark như trong paper VA-π (Bảng 2)
+# ----------------------------------------------------------------------------
+
+@torch.no_grad()
+def compute_all_metrics(
+    real_images: torch.Tensor,
+    fake_images: torch.Tensor,
+    device,
+    inception_batch_size: int = 64,
+    is_splits: int = 5,
+    knn_k: int = 3,
+) -> dict:
+    """Tính đầy đủ FID, IS (mean ± std), Precision, Recall trong một lần gọi.
+
+    Args:
+        real_images          : (N, 3, H, W) tensor ảnh thật trong [0, 1].
+        fake_images          : (M, 3, H, W) tensor ảnh sinh trong [0, 1].
+        device               : torch device.
+        inception_batch_size : batch size khi chạy InceptionV3 (giảm nếu OOM).
+        is_splits            : số splits khi tính IS.
+        knn_k                : k cho manifold Precision/Recall.
+
+    Returns:
+        dict với các key: 'fid', 'is_mean', 'is_std', 'precision', 'recall'.
+
+    Ví dụ sử dụng:
+        metrics = compute_all_metrics(real_imgs, fake_imgs, device)
+        print(f"FID={metrics['fid']:.2f}  IS={metrics['is_mean']:.2f}±{metrics['is_std']:.2f}"
+              f"  Pre={metrics['precision']:.3f}  Rec={metrics['recall']:.3f}")
+    """
+    print("[compute_all_metrics] Trích xuất Inception features cho ảnh thật...")
+    real_feats = get_inception_features(real_images, device, batch_size=inception_batch_size)
+
+    print("[compute_all_metrics] Trích xuất Inception features cho ảnh sinh...")
+    fake_feats = get_inception_features(fake_images, device, batch_size=inception_batch_size)
+
+    print("[compute_all_metrics] Tính FID...")
+    fid = compute_fid(real_feats, fake_feats)
+
+    print("[compute_all_metrics] Tính Inception Score (IS)...")
+    is_mean, is_std = compute_inception_score(
+        fake_images, device,
+        batch_size=inception_batch_size,
+        splits=is_splits,
+    )
+
+    print(f"[compute_all_metrics] Tính Precision & Recall (k={knn_k})...")
+    precision, recall = compute_precision_recall(real_feats, fake_feats, k=knn_k)
+
+    results = {
+        "fid"       : round(fid, 4),
+        "is_mean"   : round(is_mean, 4),
+        "is_std"    : round(is_std, 4),
+        "precision" : round(precision, 4),
+        "recall"    : round(recall, 4),
+    }
+
+    # In bảng tóm tắt ngay trong console để tiện đọc khi chạy notebook
+    print("\n" + "=" * 52)
+    print(f"{'Metric':<20} {'Value':>10}")
+    print("-" * 52)
+    print(f"{'FID ↓':<20} {results['fid']:>10.4f}")
+    print(f"{'IS ↑ (mean)':<20} {results['is_mean']:>10.4f}")
+    print(f"{'IS ↑ (std)':<20} {results['is_std']:>10.4f}")
+    print(f"{'Precision ↑':<20} {results['precision']:>10.4f}")
+    print(f"{'Recall ↑':<20} {results['recall']:>10.4f}")
+    print("=" * 52)
+
+    return results
