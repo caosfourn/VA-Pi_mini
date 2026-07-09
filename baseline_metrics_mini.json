@@ -1,0 +1,9 @@
+{
+  "vqvae_reconstruction_mse": 0.022320597370465597,
+  "codebook_usage_pct": 14.453125,
+  "fid_approx": 107.7264373001651,
+  "is_approx_mean": 2.913494825363159,
+  "is_approx_std": 0.08988067507743835,
+  "n_eval_images": 1000,
+  "note": "FID/IS xấp xỉ, không phải chuẩn 50k-sample như paper gốc. Dùng để so sánh tương đối trước/sau VA-π."
+}
