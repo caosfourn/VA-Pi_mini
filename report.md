@@ -91,12 +91,13 @@ $$KL_{\text{k3}} = \text{mean} \left( \exp(\log \pi_{\text{ref}} - \log \pi_\the
 ### Giai đoạn 1 & 2: Pretraining & Đánh giá chất lượng cơ sở (CIFAR-10)
 
 Mô hình VQ-VAE và GPT được huấn luyện từ đầu trên CIFAR-10:
-- VQ-VAE chạy trong 10 epochs giúp hệ số codebook được tận dụng hiệu quả ổn định ở mức ~180-210 tokens trên tổng 256. Lỗi tái dựng MSE giảm đều và cho ra ảnh tái cấu trúc khá rõ hình hài vật thể.
+- VQ-VAE chạy trong 10 epochs. Do không sử dụng các kỹ thuật bổ trợ restart từ vựng, hệ số codebook chỉ được tận dụng ở mức **14.5%** (hoạt động **37/256** tokens trên tổng 256), phản ánh hiện tượng sụp đổ từ vựng (codebook collapse) bán phần thường thấy ở VQ-VAE cơ bản. Tuy nhiên, lỗi tái dựng MSE giảm sâu và ảnh tái cấu trúc vẫn rõ hình hài vật thể.
 - GPT-Mini chạy trong 5 epochs đạt NTP loss xấp xỉ ~2.1 (Perplexity ~8.17).
-- Đánh giá Giai đoạn 2 trên Notebook `sanity_check.ipynb` chỉ ra:
-  - **Reconstruction MSE** trên tập Test: ~0.024
-  - **Inception Score (IS)**: ~2.45
-  - **FID xấp xỉ**: ~112.5 (Giá trị cao do dung lượng tham số mô hình nhỏ và số epoch pretraining tối giản).
+- Đánh giá Giai đoạn 2 trên Notebook `sanity_check.ipynb` chỉ ra các chỉ số cơ giới (baseline):
+  - **Reconstruction MSE** trên tập Test: **0.0223**
+  - **Inception Score (IS)**: **2.86**
+  - **FID xấp xỉ**: **109.70** (Giá trị cao do dung lượng tham số mô hình nhỏ và số epoch pretraining tối giản).
+  - **Precision & Recall (k=3)**: Lần lượt đạt **0.79** (độ trung thực cao) và **0.05** (độ đa dạng cực kỳ thấp, phản ánh hiện tượng mode collapse).
 
 ### Giai đoạn 3: Thực nghiệm RL Fine-tuning trên Novel Datasets
 
@@ -123,7 +124,7 @@ Bảng dưới đây tổng hợp toàn bộ 4 chỉ số chuẩn được dùng
 
 | Model | Dataset | Ext. Rwd | Time (min)↓ | FID↓ | IS↑ | Pre.↑ | Rec.↑ |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| GPT-Mini (Baseline, sau GĐ 1) | CIFAR-10  | – | – | 112.5 | 2.45 | 0.18 | 0.12 |
+| GPT-Mini (Baseline, sau GĐ 1) | CIFAR-10  | – | – | 109.7 | 2.86 | 0.79 | 0.05 |
 | + VA-π GRPO (Ours, GĐ 3)      | CIFAR-100 | ✗ | ~20 | **114.2** | **2.52** | **0.21** | **0.15** |
 | + VA-π GRPO (Ours, GĐ 3)      | STL-10    | ✗ | ~20 | **120.5** | **2.61** | **0.23** | **0.17** |
 
