@@ -137,7 +137,8 @@ def get_inception_features(images, device, batch_size=64):
         batch = images[i:i + batch_size].to(device)
         batch = F.interpolate(batch, size=(299, 299), mode="bilinear", align_corners=False)
         batch = (batch - mean) / std
-        f = model(batch)
+        out = model(batch)
+        f = out.logits if hasattr(out, 'logits') else out[0]  # InceptionV3 aux_logits returns tuple
         feats.append(f.cpu())
     return torch.cat(feats, dim=0).numpy()
 
@@ -169,7 +170,8 @@ def compute_inception_score(images, device, batch_size=64, splits=5):
         batch = images[i:i + batch_size].to(device)
         batch = F.interpolate(batch, size=(299, 299), mode="bilinear", align_corners=False)
         batch = (batch - mean) / std
-        logits = model(batch)
+        out = model(batch)
+        logits = out.logits if hasattr(out, 'logits') else out[0]  # InceptionV3 aux_logits returns tuple
         probs = F.softmax(logits, dim=-1)
         all_probs.append(probs.cpu().numpy())
     all_probs = np.concatenate(all_probs, axis=0)
